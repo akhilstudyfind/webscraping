@@ -4,6 +4,8 @@ from bs4 import BeautifulSoup
 import csv
 import re
 import threading
+import random
+import time
 
 def getinfo(soup):
     # NAME OF ORGANIZATION
@@ -81,60 +83,90 @@ def getfinancials(revenues_container):
             
     return [year, revenue, expenses, income]
 
-# Define a function for each thread
-def scrape_org(id, url, writer):
-    # Send a GET request to the URL
-    response = requests.get(url)
-    if(response.status_code != 200):
-        #print("cant connect", id)
-        return
+def scrape_org(id, url, sem, writer):
+    try:
+        user_agents = [
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 6.1; WOW64; Trident/7.0; AS; rv:11.0) like Gecko",
+            "Mozilla/5.0 (Windows NT 6.3; WOW64; Trident/7.0; rv:11.0) like Gecko",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.96 Safari/537.36 Edge/16.16299",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/61.0.3163.100 Safari/537.36"
+        ]
 
-    # Parse the HTML content of the page with Beautiful Soup
-    soup = BeautifulSoup(response.content, "lxml")
+        # Set the headers to use a random user agent
+        headers = {
+            "User-Agent": random.choice(user_agents)
+        }
+        # Acquire the semaphore before making the request
+        sem.acquire()
 
-    # Find the div with all revenues
-    revenues_container = soup.find("div", {"class": "filings"})
-    if(revenues_container == None):
-        #print("revenues", id)
-        return
+        # Send a GET request to the URL
+        response = requests.get(url)
 
-    info = []
-    financials = []
-    info = getinfo(soup)
-    if(info[0] == "Unknown Organization" or info[0] == "N/A"):
-        #print("unknown", id)
-        return
+        # Release the semaphore after the request is complete
+        sem.release()
 
-    financials = getfinancials(revenues_container)
+        if(response.status_code != 200):
+            return
 
-    total = info + financials
-    
-    lock.acquire()
-    writer.writerow(total)
-    lock.release()
+        # Parse the HTML content of the page with Beautiful Soup
+        soup = BeautifulSoup(response.content, "lxml")
+
+        # Find the div with all revenues
+        revenues_container = soup.find("div", {"class": "filings"})
+        if(revenues_container == None):
+            return
+
+        info = []
+        financials = []
+        info = getinfo(soup)
+        if(info[0] == "Unknown Organization" or info[0] == "N/A"):
+            return
+
+        financials = getfinancials(revenues_container)
+
+        total = info + financials
+
+        # Acquire the semaphore before writing to the CSV file
+        sem.acquire()
+
+        writer.writerow(total)
+
+        # Release the semaphore after writing to the CSV file
+        sem.release()
+    except Exception as e:
+        print(f"Error scraping {url}: {e}")
 
 
-# Create a thread for each URL request
+# Create a semaphore with a maximum of 10 threads allowed to run at a time
+sem = threading.Semaphore(100)
+
+# Create a list to hold all threads
 threads = []
-lock = threading.Lock()
+
+# Open the CSV file for writing
 csv_file = open("revenues.csv", "w", newline="")
 writer = csv.writer(csv_file)
 writer.writerow(["Name of Organization", "EIN", "Classification", "Nonprofit Tax Code Designation: 501(c)(3)", 
                 "FISCAL YEAR", "Total Revenue", "Total Functional Expenses", "Net Income"])
 
-orgstxt = open("shortlist.txt", "r")
+# Open the file with the list of organizations to scrape
+orgstxt = open("data-download-pub78.txt", "r")
 for line in orgstxt:
+    # Get the organization ID and URL
     id = line.split("|")[0]
     url = "https://projects.propublica.org/nonprofits/organizations/" + id
 
     # Create a thread for each URL request
-    thread = threading.Thread(target=scrape_org, args=(id, url, writer))
+    thread = threading.Thread(target=scrape_org, args=(id, url, sem, writer))
     threads.append(thread)
     thread.start()
+    #time.sleep(random.uniform(1,3))
 
 # Wait for all threads to complete
 for thread in threads:
     thread.join()
 
+# Close the CSV and text files
 csv_file.close()
 orgstxt.close()
