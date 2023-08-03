@@ -1,172 +1,192 @@
-from requests.models import LocationParseError
 import requests
 from bs4 import BeautifulSoup
 import csv
 import re
-import threading
-import random
 import time
+import random
+import os
 
 def getinfo(soup):
-    # NAME OF ORGANIZATION
+    """
+    Extracts organization information from the soup object.
+
+    Args:
+        soup (BeautifulSoup): Soup object of the web page.
+
+    Returns:
+        list: List containing organization information.
+    """
+
     content = soup.find("div", {"class": "left-col"})
-    if(content == None):
-        return ["N/A", "N/A", "N/A", "N/A"]
+    if content is None:
+        return ["N/A", "N/A", "N/A", "No"]
     orgname = content.find("h1").text.strip()
-    if(orgname == "Unknown Organization"):
-        return ["N/A", "N/A", "N/A", "N/A"]
+    if orgname == "Unknown Organization":
+        return ["N/A", "N/A", "N/A", "No"]
 
     ein = "N/A"
     classification = "N/A"
-    taxcode = "N/A"
+    taxcode = "No"
 
-    # GATHERING INFO
     info = content.find("div", {"class": "profile-info"})
     informationli = info.find_all("li")
 
-    # Going through "li" list of information
     for information in informationli:
-        if("EIN" in information.text):
-            ein = information.text.strip()
-            ein = ein.split(" ")[1]
-        if("Classification" in information.text):
+        if "EIN" in information.text:
+            ein = information.text.strip().split(" ")[1]
+        elif "Classification" in information.text:
             classification = information.text.strip().split("(NTEE)")[1].strip()
             classification = re.sub(r'\n', '', classification)
             classification = re.sub(r'\s+', ' ', classification)
-        if("501" in information.text):
-            if("501(c)(3)" in information.text):
-                taxcode = "Yes"
-            else:
-                taxcode = "No"
+        elif "501(c)(3)" in information.text:
+            taxcode = "Yes"
 
-    return([orgname, ein, classification, taxcode])
+    return [orgname, ein, classification, taxcode]
 
 def getfinancials(revenues_container):
-    year = "N/A"
-    revenue = "N/A"
-    expenses = "N/A"
-    income = "N/A"
+    """
+    Extracts financial information from the revenues container.
 
-    # Iterate over each revenue container, skipping the header row
+    Args:
+        revenues_container (BeautifulSoup): Revenues container object.
+
+    Returns:
+        list: List containing financial information.
+    """
+
     for revenue_container in revenues_container.find_all("div", {"class": "single-filing"}):
+
         yearloc = revenue_container.find("h4", {"class": "year-label"})
-        if(yearloc != None):
-            year = yearloc.text.strip()
-            year = year.split(" ")[1]
+
+        year = "N/A"
+        revenue = "N/A"
+        expenses = "N/A"
+        income = "N/A"
+
+        if yearloc is not None:
+            year = yearloc.text.strip().split(" ")[1]
             revenue_table = revenue_container.find("table", {"class": "revenue"})
 
-            # Write revenue, expenses, income data if exists, else continue
-            if(revenue_table!=None):
+            if revenue_table is not None:
                 pos = revenue_table.find("th", {"class": "pos"})
-                if(pos != None):
+                if pos is not None:
                     revenueloc = pos.find("h3")
-                    if(revenueloc== None):
-                        revenue = "N/A"
-                    else:
+                    if revenueloc is not None:
                         revenue = revenueloc.text.strip().replace("$", "").replace(",", "")
                 else:
-                    revenue == "N/A"
+                    revenue = "N/A"
+
                 expensesloc = revenue_table.find("th", {"class": "neg"})
-                if(expensesloc == None):
-                    expenses = "N/A"
-                else:
+                if expensesloc is not None:
                     expenses = expensesloc.text.strip().replace("$", "").replace(",", "")
+
                 incomeloc = revenue_table.find("th", {"class": "tablenum pos"})
-                if(incomeloc == None):
-                    income = "N/A"
-                else:
+                if incomeloc is not None:
                     income = incomeloc.text.strip().replace("$", "").replace(",", "")
 
-            # If any financial data is filled out, break and write
-            if(revenue != "N/A" or expenses != "N/A" or income != "N/A"):
+            if revenue != "N/A" or expenses != "N/A" or income != "N/A":
                 break
-            
+
     return [year, revenue, expenses, income]
 
-def scrape_org(id, url, sem, writer):
-    try:
-        user_agents = [
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36",
-            "Mozilla/5.0 (Windows NT 6.1; WOW64; Trident/7.0; AS; rv:11.0) like Gecko",
-            "Mozilla/5.0 (Windows NT 6.3; WOW64; Trident/7.0; rv:11.0) like Gecko",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.96 Safari/537.36 Edge/16.16299",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/61.0.3163.100 Safari/537.36"
-        ]
+def process_txt_file(file_path):
+    """
+    Processes a TXT file and extracts information to write to a CSV file.
 
-        # Set the headers to use a random user agent
-        headers = {
-            "User-Agent": random.choice(user_agents)
-        }
-        # Acquire the semaphore before making the request
-        sem.acquire()
+    Args:
+        file_path (str): Path to the TXT file.
+    """
 
-        # Send a GET request to the URL
-        response = requests.get(url)
+    txt_file_name = os.path.basename(file_path)
+    txt_file_id = re.findall(r'\d+', txt_file_name)[-1]  # Extract the last number as ID
+    csv_file_name = "revenues_split_" + txt_file_id + ".csv"
+    csv_file_path = os.path.join('revenues', csv_file_name)
+    print(csv_file_path)
 
-        # Release the semaphore after the request is complete
-        sem.release()
+    csv_exists = os.path.isfile(csv_file_path)
 
-        if(response.status_code != 200):
-            return
+    csv_file = open(csv_file_path, "a", newline="")
+    writer = csv.writer(csv_file)
 
-        # Parse the HTML content of the page with Beautiful Soup
-        soup = BeautifulSoup(response.content, "lxml")
+    # Write the header row only if the file doesn't exist or is empty
+    if not csv_exists or os.path.getsize(csv_file_path) == 0:
+        writer.writerow(["Name of Organization", "EIN", "Classification", "Nonprofit Tax Code Designation: 501(c)(3)",
+                         "FISCAL YEAR", "Total Revenue", "Total Functional Expenses", "Net Income"])
 
-        # Find the div with all revenues
-        revenues_container = soup.find("div", {"class": "filings"})
-        if(revenues_container == None):
-            return
+    existing_ids = set()
+    if csv_exists:
+        with open(csv_file_path, "r", newline="") as csv_file:
+            reader = csv.reader(csv_file)
+            next(reader)  # Skip the header row
+            for row in reader:
+                if len(row) > 1:
+                    existing_ids.add(row[1].replace("-", ""))  # Assuming EIN is in the second column
 
-        info = []
-        financials = []
-        info = getinfo(soup)
-        if(info[0] == "Unknown Organization" or info[0] == "N/A"):
-            return
+    count = 0
+    scraped = 0
 
-        financials = getfinancials(revenues_container)
+    urlformat = "https://projects.propublica.org/nonprofits/organizations/"
 
-        total = info + financials
+    with open(file_path, "r") as orgstxt:
+        for line in orgstxt:
+            id = line.split("|")[0]
 
-        # Acquire the semaphore before writing to the CSV file
-        sem.acquire()
+            if id in existing_ids:
+                continue  # Skip to the next ID
 
-        writer.writerow(total)
+            url = urlformat + id
+            count += 1
 
-        # Release the semaphore after writing to the CSV file
-        sem.release()
-    except Exception as e:
-        print(f"Error scraping {url}: {e}")
+            response = requests.get(url)
+            if response.status_code != 200:
+                print(response.status_code, url)
+                if response.status_code == 403:
+                    break
+                continue
 
+            scraped += 1
 
-# Create a semaphore with a maximum of 10 threads allowed to run at a time
-sem = threading.Semaphore(100)
+            soup = BeautifulSoup(response.content, "lxml")
 
-# Create a list to hold all threads
-threads = []
+            revenues_container = soup.find("div", {"class": "filings"})
+            if revenues_container is None:
+                continue
 
-# Open the CSV file for writing
-csv_file = open("revenues.csv", "w", newline="")
-writer = csv.writer(csv_file)
-writer.writerow(["Name of Organization", "EIN", "Classification", "Nonprofit Tax Code Designation: 501(c)(3)", 
-                "FISCAL YEAR", "Total Revenue", "Total Functional Expenses", "Net Income"])
+            info = getinfo(soup)
+            if info[0] == "Unknown Organization" or info[0] == "N/A":
+                continue
 
-# Open the file with the list of organizations to scrape
-orgstxt = open("data-download-pub78.txt", "r")
-for line in orgstxt:
-    # Get the organization ID and URL
-    id = line.split("|")[0]
-    url = "https://projects.propublica.org/nonprofits/organizations/" + id
+            financials = getfinancials(revenues_container)
 
-    # Create a thread for each URL request
-    thread = threading.Thread(target=scrape_org, args=(id, url, sem, writer))
-    threads.append(thread)
-    thread.start()
-    #time.sleep(random.uniform(1,3))
+            total = info + financials
+            writer.writerow(total)
 
-# Wait for all threads to complete
-for thread in threads:
-    thread.join()
+            time.sleep(random.randint(3, 5))
 
-# Close the CSV and text files
-csv_file.close()
-orgstxt.close()
+    csv_file.close()
+
+def main():
+    """
+    Processes all split TXT files in the folder and generates CSV files with the extracted information.
+    """
+
+    folder_path = 'split-files'
+    if not os.path.exists('revenues'):
+        os.makedirs('revenues')
+
+    file_ids = []
+    for file_name in os.listdir(folder_path):
+        if file_name.startswith('propublica_split_') and file_name.endswith('.txt'):
+            file_id = re.findall(r'\d+', file_name)[0]
+            file_ids.append(int(file_id))
+
+    file_ids.sort()  # Sort the file IDs in ascending order
+
+    for file_id in file_ids:
+        file_name = f"propublica_split_{file_id}.txt"
+        file_path = os.path.join(folder_path, file_name)
+        process_txt_file(file_path)
+        
+
+if __name__ == "__main__":
+    main()
