@@ -11,7 +11,7 @@ propublica-scraper.py:
 - monitors for HTTP error status codes (eg. 404, 403)
 
 shortlist.txt:
-- a file containing the first 10000 out of 1.2 million page ids to scrape
+- a file containing the first 100 out of 1.2 million page ids to scrape
 - in the engine, the program is fed a folder of splitted txt files
 
 revenues.csv:
